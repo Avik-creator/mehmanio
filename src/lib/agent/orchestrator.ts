@@ -347,12 +347,15 @@ function localReply(state: BookingState, askedFacts: string[]): string {
     );
     return `You're held${room ? `: ${room.reason}` : ""}. Hold ${state.bookingHoldId} is valid for 15 minutes. This desk doesn't take payment — that's confirmation here.`;
   }
+  if (state.nextAction === "hold" && state.selectedRoomId) {
+    const room = state.lastRecommendations.find(
+      (item) => item.roomId === state.selectedRoomId,
+    );
+    return `I can hold ${room ? room.reason : state.selectedRoomId} for 15 minutes while you confirm. Shall I go ahead?`;
+  }
   if (state.lastRecommendations[0]) {
     const top = state.lastRecommendations[0];
     return `I'd look at ${top.reason} first (₹${top.nightlyRate}/night before tax). Want me to price it for your dates?`;
-  }
-  if (state.nextAction === "hold" && state.selectedRoomId) {
-    return `I can hold ${state.selectedRoomId} for 15 minutes while you confirm.`;
   }
   return "Tell me the city, dates, and how many people — I'll check what's actually free.";
 }
