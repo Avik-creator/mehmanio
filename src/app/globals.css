@@ -1,0 +1,76 @@
+@import "tailwindcss";
+@import "streamdown/styles.css";
+@source "../../node_modules/streamdown/dist/*.js";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+  --card: #ffffff;
+  --card-foreground: #171717;
+  --muted: #f3eee4;
+  --muted-foreground: #6f6253;
+  --border: #e0d6c6;
+  --input: #d7cbb8;
+  --primary: #1f4d3a;
+  --primary-foreground: #f6f1e8;
+  --radius: 0.625rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+.mira-md {
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+.mira-md > *:first-child {
+  margin-top: 0;
+}
+
+.mira-md > *:last-child {
+  margin-bottom: 0;
+}
+
+.mira-md p {
+  margin: 0 0 0.6rem;
+}
+
+.mira-md strong {
+  font-weight: 600;
+}
+
+.mira-md table {
+  width: 100%;
+  min-width: 28rem;
+  border-collapse: collapse;
+  margin: 0.5rem 0 0.75rem;
+  font-size: 0.8rem;
+}
+
+.mira-md th,
+.mira-md td {
+  border: 1px solid #e0d6c6;
+  padding: 0.4rem 0.55rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.mira-md th {
+  background: #f3eee4;
+  font-weight: 600;
+}
+
+.mira-md tr:nth-child(even) td {
+  background: #faf6ee;
+}
