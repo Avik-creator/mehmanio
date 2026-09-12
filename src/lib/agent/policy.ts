@@ -86,7 +86,12 @@ export function toolChoiceForStep(
 ): "auto" | "none" | { type: "tool"; toolName: MiraToolName } {
   const primary = primaryToolForAction(action, hasHold, switchingRoom);
   if (primary == null) return "none";
-  if (stepNumber === 0) return { type: "tool", toolName: primary };
+  if (stepNumber === 0) {
+    // When creating a *new* hold the model may want to price first — let it.
+    // When *confirming* an existing hold, force the confirm tool directly.
+    if (action === "hold" && !hasHold && !switchingRoom) return "auto";
+    return { type: "tool", toolName: primary };
+  }
   return "auto";
 }
 

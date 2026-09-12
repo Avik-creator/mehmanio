@@ -36,15 +36,38 @@ function model() {
   return groq(modelId());
 }
 
+const RATE_LIMIT_RETRIES = 3;
+
+function getRateLimitDelay(error: unknown): number | null {
+  const msg = error instanceof Error ? error.message : String(error);
+  const match = msg.match(/try again in (\d+(?:\.\d+)?)s/i);
+  if (match) return Math.ceil(Number(match[1]) * 1000);
+  if (/rate.?limit/i.test(msg)) return 5000;
+  return null;
+}
+
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= RATE_LIMIT_RETRIES; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      const delay = getRateLimitDelay(error);
+      if (delay == null || attempt === RATE_LIMIT_RETRIES) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delay + 200));
+    }
+  }
+  throw lastError;
+}
+
 function groqCallSettings() {
   const qwen = modelId().includes("qwen");
   return {
     temperature: 0 as const,
     maxOutputTokens: qwen ? 700 : 1024,
-    reasoning: "none" as const,
     providerOptions: {
       groq: {
-        reasoningEffort: "none" as const,
         parallelToolCalls: false,
       },
     },
@@ -117,14 +140,16 @@ export async function extractTurn(
   if (!process.env.GROQ_API_KEY) return fallback;
 
   try {
-    const { output } = await generateText({
-      model: model(),
-      ...groqCallSettings(),
-      maxOutputTokens: 400,
-      output: Output.object({ schema: extractSchema }),
-      system: EXTRACT_SYSTEM,
-      prompt: `Today is ${today} (Asia/Kolkata).\nSlots: ${JSON.stringify(compactState(state))}\nGuest: ${message}\nReturn JSON.`,
-    });
+    const { output } = await withRetry(() =>
+      generateText({
+        model: model(),
+        ...groqCallSettings(),
+        maxOutputTokens: 400,
+        output: Output.object({ schema: extractSchema }),
+        system: EXTRACT_SYSTEM,
+        prompt: `Today is ${today} (Asia/Kolkata).\nSlots: ${JSON.stringify(compactState(state))}\nGuest: ${message}\nReturn JSON.`,
+      }),
+    );
     return reconcileExtract(message, output ?? fallback);
   } catch {
     return fallback;
@@ -185,12 +210,14 @@ export async function runTurn(args: {
     rawReply = localReply(state, extracted.askedFacts);
   } else if (state.nextAction === "ask" && extracted.askedFacts.length === 0) {
     try {
-      const spoken = await generateText({
-        model: model(),
-        ...groqCallSettings(),
-        system: ACT_SYSTEM,
-        prompt: `${stayLine(state)}\nCanonical slots: ${JSON.stringify(compactState(state))}\nMissing: ${state.missingSlots.join(", ")}\nGuest: ${args.message}\nAsk one natural question. Do not invent inventory or dates.`,
-      });
+      const spoken = await withRetry(() =>
+        generateText({
+          model: model(),
+          ...groqCallSettings(),
+          system: ACT_SYSTEM,
+          prompt: `${stayLine(state)}\nCanonical slots: ${JSON.stringify(compactState(state))}\nMissing: ${state.missingSlots.join(", ")}\nGuest: ${args.message}\nAsk one natural question. Do not invent inventory or dates.`,
+        }),
+      );
       rawReply = spoken.text;
     } catch (error) {
       errors.push(error instanceof Error ? error.message : "ask failed");
@@ -198,12 +225,14 @@ export async function runTurn(args: {
     }
   } else if (primary == null) {
     try {
-      const spoken = await generateText({
-        model: model(),
-        ...groqCallSettings(),
-        system: ACT_SYSTEM,
-        prompt: `${stayLine(state)}\nCanonical slots: ${JSON.stringify(compactState(state))}\nGuest: ${args.message}\nA hold already exists. Confirm it. Do not call tools or invent payment.`,
-      });
+      const spoken = await withRetry(() =>
+        generateText({
+          model: model(),
+          ...groqCallSettings(),
+          system: ACT_SYSTEM,
+          prompt: `${stayLine(state)}\nCanonical slots: ${JSON.stringify(compactState(state))}\nGuest: ${args.message}\nA hold already exists. Confirm it. Do not call tools or invent payment.`,
+        }),
+      );
       rawReply = spoken.text;
     } catch (error) {
       errors.push(error instanceof Error ? error.message : "confirm failed");
@@ -211,44 +240,50 @@ export async function runTurn(args: {
     }
   } else {
     try {
-      const acted = await generateText({
-        model: model(),
-        ...groqCallSettings(),
-        tools,
-        activeTools,
-        stopWhen: isStepCount(6),
-        system: `${ACT_SYSTEM}\n${stayLine(state)}\nCanonical slots: ${JSON.stringify(compactState(state))}\nToday: ${today}\nAsked facts: ${JSON.stringify(extracted.askedFacts)}`,
-        prompt: args.message,
-        prepareStep: ({ stepNumber }) => ({
-          toolChoice: toolChoiceForStep(
-            state.nextAction,
-            stepNumber,
-            hasHold,
-            switchingRoom,
-          ),
-          activeTools: activeToolsForAction(
-            state.nextAction,
-            hasHold,
-            switchingRoom,
-          ),
+      const acted = await withRetry(() =>
+        generateText({
+          model: model(),
+          ...groqCallSettings(),
+          tools,
+          activeTools,
+          stopWhen: isStepCount(6),
+          system: `${ACT_SYSTEM}\n${stayLine(state)}\nCanonical slots: ${JSON.stringify(compactState(state))}\nToday: ${today}\nAsked facts: ${JSON.stringify(extracted.askedFacts)}`,
+          prompt: args.message,
+          prepareStep: ({ stepNumber }) => ({
+            toolChoice: toolChoiceForStep(
+              state.nextAction,
+              stepNumber,
+              hasHold,
+              switchingRoom,
+            ),
+            activeTools: activeToolsForAction(
+              state.nextAction,
+              hasHold,
+              switchingRoom,
+            ),
+          }),
+          repairToolCall: async ({ toolCall, error }) => {
+            if (!NoSuchToolError.isInstance(error)) return null;
+            const fixed = normalizeToolName(toolCall.toolName, Object.keys(tools));
+            if (!fixed) return null;
+            return { ...toolCall, toolName: fixed };
+          },
         }),
-        repairToolCall: async ({ toolCall, error }) => {
-          if (!NoSuchToolError.isInstance(error)) return null;
-          const fixed = normalizeToolName(toolCall.toolName, Object.keys(tools));
-          if (!fixed) return null;
-          return { ...toolCall, toolName: fixed };
-        },
-      });
+      );
       rawReply = acted.text;
       if (!rawReply.trim()) {
-        rawReply = await speakFromTraces(ctx.state, traces, args.message);
+        rawReply = await withRetry(() =>
+          speakFromTraces(ctx.state, traces, args.message),
+        );
       }
     } catch (error) {
       errors.push(error instanceof Error ? error.message : "tool loop failed");
       if (isRejectedToolName(error) && primary) {
         try {
           await executeForcedTool(ctx, primary);
-          rawReply = await speakFromTraces(ctx.state, traces, args.message);
+          rawReply = await withRetry(() =>
+            speakFromTraces(ctx.state, traces, args.message),
+          );
         } catch (forcedError) {
           errors.push(
             forcedError instanceof Error ? forcedError.message : "forced tool failed",

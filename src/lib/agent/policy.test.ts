@@ -62,6 +62,10 @@ describe("toolChoiceForStep", () => {
       toolName: "confirm_booking_hold",
     });
   });
+
+  test("creating a new hold uses auto so the model can price first", () => {
+    expect(toolChoiceForStep("hold", 0, false)).toBe("auto");
+  });
 });
 
 describe("activeToolsForAction", () => {
